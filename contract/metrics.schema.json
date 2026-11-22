@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:library-contract:metrics",
+  "title": "metrics.json",
+  "description": "Output of the `eval` service, written to ${LIBRARY_RESULTS_DIR}/metrics.json and committed as results/metrics.json. Metric definitions are in runtime.md. Exactly one system has served = true.",
+  "type": "object",
+  "required": ["contract_version", "queries_sha256", "corpus_sha256", "systems"],
+  "properties": {
+    "contract_version": {
+      "description": "Content of contract/VERSION the project was built against.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "queries_sha256": {
+      "description": "Lowercase hex SHA-256 of the bytes of the file at LIBRARY_QUERIES_PATH.",
+      "$ref": "#/$defs/sha256"
+    },
+    "corpus_sha256": {
+      "description": "Lowercase hex SHA-256 of the bytes of the file at LIBRARY_CORPUS_PATH.",
+      "$ref": "#/$defs/sha256"
+    },
+    "systems": {
+      "description": "Every retrieval system evaluated, keyed by a name the candidate chooses.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"},
+      "additionalProperties": {"$ref": "#/$defs/system"}
+    },
+    "platform": {
+      "description": "OS and CPU architecture eval ran on, as Docker names them, for example linux/amd64 or linux/arm64. Absent means linux/amd64.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+/[a-z0-9_]+(/[a-z0-9]+)?$"
+    },
+    "timings": {
+      "description": "Optional timing measurements; free form and never compared.",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "score": {"type": "number", "minimum": 0, "maximum": 1},
+    "system": {
+      "type": "object",
+      "required": ["served", "aggregates", "rankings"],
+      "properties": {
+        "served": {
+          "description": "true for the one system that GET /search serves.",
+          "type": "boolean"
+        },
+        "aggregates": {
+          "type": "object",
+          "required": ["ndcg@10", "mrr@10", "recall@100", "judged@10"],
+          "additionalProperties": false,
+          "properties": {
+            "ndcg@10": {"$ref": "#/$defs/score"},
+            "mrr@10": {"$ref": "#/$defs/score"},
+            "recall@100": {"$ref": "#/$defs/score"},
+            "judged@10": {"$ref": "#/$defs/score"}
+          }
+        },
+        "rankings": {
+          "description": "For every query_id of the queries file, the ranked work_keys (best first, at most 100, no repeats).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^/works/OL[0-9]+W$"}
+          }
+        }
+      }
+    }
+  }
+}

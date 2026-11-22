@@ -1,0 +1,171 @@
+# Runs your project on a network shaped like the grading one (contract/runtime.md
+# sections 3 and 6): every service on an internal network, the only way out an HTTPS
+# proxy that allows CONNECT to port 443 of the hosts in EGRESS_HOSTS, the data of this
+# repository mounted read-only at /grading-data. It is a local approximation, not the
+# grading environment. It uses networks, bind mounts and a service name that are
+# forbidden in your compose.yaml (runtime.md section 9): keep them in this file only.
+#
+# 1. Add every service of your compose.yaml under `services:` below with `<<: *grading`.
+#    A service left out stays off the internal network, and the others cannot reach it.
+# 2. Run, from the repository root (Docker Compose v2.24 or later):
+#
+#      EGRESS_HOSTS="api.example.com" docker compose -f compose.yaml -f compose.grading-like.yaml up --build --scale api=2
+#      docker compose -f compose.yaml -f compose.grading-like.yaml --profile eval up --no-deps eval
+#
+#    EGRESS_HOSTS is the comma-separated egress_hosts of your grading.toml (empty when
+#    offline). For each name in your external_secrets, add `NAME: ${NAME}` under
+#    x-grading.environment below and export NAME in the same shell; the grading
+#    environment sets them the same way in every service. Grading runs two api
+#    containers for the reservation check, hence --scale api=2.
+#    eval writes results/local/metrics.json.
+# 3. With no published ports, reach the api from inside the network:
+#
+#      docker compose -f compose.yaml -f compose.grading-like.yaml exec api \
+#        python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read())"
+#
+# Set ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN and ANTHROPIC_MODEL in your shell to point
+# the agent loop at your own fake LLM service (add it to `services:` and to NO_PROXY) or
+# at a real LLM (add its host to EGRESS_HOSTS). Left unset, they point to an address that
+# refuses connections, as in every grading check except the agent one.
+
+x-grading: &grading
+  environment:
+    LIBRARY_CORPUS_PATH: /grading-data/data/corpus/openlibrary-works.jsonl
+    LIBRARY_INVENTORY_PATH: /grading-data/data/inventory.sample.json
+    LIBRARY_QUERIES_PATH: /grading-data/evaluation/public-queries.jsonl
+    LIBRARY_RESULTS_DIR: /grading-results
+    ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-http://127.0.0.1:9}
+    ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-unset}
+    ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-unset}
+    HTTPS_PROXY: http://egress-proxy:3128
+    HTTP_PROXY: http://egress-proxy:3128
+    https_proxy: http://egress-proxy:3128
+    http_proxy: http://egress-proxy:3128
+    # Add every service of your project, and the host of ANTHROPIC_BASE_URL.
+    NO_PROXY: localhost,127.0.0.1,::1,api,eval
+    no_proxy: localhost,127.0.0.1,::1,api,eval
+  volumes:
+    - type: bind
+      source: ./data
+      target: /grading-data/data
+      read_only: true
+    - type: bind
+      source: ./evaluation
+      target: /grading-data/evaluation
+      read_only: true
+    - type: bind
+      source: ./results/local
+      target: /grading-results
+      bind:
+        create_host_path: true
+    - type: volume
+      source: model-cache
+      target: /model-cache
+  networks: [grading]
+  depends_on:
+    grading-dirs:
+      condition: service_completed_successfully
+
+services:
+  api:
+    <<: *grading
+  eval:
+    <<: *grading
+  # db:
+  #   <<: *grading
+
+  # /model-cache and the results directory are writable by any user, as in grading.
+  grading-dirs:
+    image: python:3.12-slim
+    command: ["chmod", "1777", "/model-cache", "/grading-results"]
+    volumes:
+      - type: bind
+        source: ./results/local
+        target: /grading-results
+        bind:
+          create_host_path: true
+      - type: volume
+        source: model-cache
+        target: /model-cache
+    networks: [grading]
+
+  egress-proxy:
+    image: python:3.12-slim
+    command: ["python", "/proxy.py"]
+    environment:
+      EGRESS_HOSTS: ${EGRESS_HOSTS:-}
+      PYTHONUNBUFFERED: "1"
+    configs:
+      - source: egress-proxy
+        target: /proxy.py
+    networks: [grading, egress]
+
+networks:
+  grading:
+    internal: true
+  egress: {}
+
+volumes:
+  model-cache: {}
+
+configs:
+  egress-proxy:
+    content: |
+      import asyncio, ipaddress, os, socket
+
+      HOSTS = {h.strip().lower() for h in os.environ.get("EGRESS_HOSTS", "").split(",") if h.strip()}
+
+      async def reply(writer, status):
+          writer.write(f"HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode())
+          await writer.drain()
+          writer.close()
+
+      async def pipe(reader, writer):
+          try:
+              while data := await reader.read(65536):
+                  writer.write(data)
+                  await writer.drain()
+          except OSError:
+              pass
+          finally:
+              writer.close()
+
+      async def handle(reader, writer):
+          try:
+              head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 15)
+          except Exception:
+              writer.close()
+              return
+          parts = head.split(b"\r\n", 1)[0].decode("latin-1").split()
+          if len(parts) != 3 or parts[0] != "CONNECT":
+              print("refused: not a CONNECT request", parts[:2], flush=True)
+              return await reply(writer, "405 Method Not Allowed")
+          host, _, port = parts[1].rpartition(":")
+          host = host.lower().rstrip(".")
+          if port != "443" or host not in HOSTS:
+              print("refused: host or port not in EGRESS_HOSTS", parts[1], flush=True)
+              return await reply(writer, "403 Forbidden")
+          try:
+              infos = await asyncio.get_running_loop().getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+              addresses = sorted({info[4][0] for info in infos})
+          except OSError:
+              addresses = []
+          if not addresses or not all(ipaddress.ip_address(a).is_global for a in addresses):
+              print("refused: no public address", host, flush=True)
+              return await reply(writer, "403 Forbidden")
+          try:
+              up_reader, up_writer = await asyncio.wait_for(asyncio.open_connection(addresses[0], 443), 15)
+          except (OSError, asyncio.TimeoutError):
+              return await reply(writer, "502 Bad Gateway")
+          print("connect", host, flush=True)
+          writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+          await writer.drain()
+          await asyncio.gather(pipe(reader, up_writer), pipe(up_reader, writer))
+
+      async def main():
+          server = await asyncio.start_server(handle, "0.0.0.0", 3128)
+          print("egress proxy allows", sorted(HOSTS), flush=True)
+          async with server:
+              await server.serve_forever()
+
+      asyncio.run(main())

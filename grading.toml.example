@@ -1,0 +1,15 @@
+# Copy to grading.toml at the repository root. Rules: contract/runtime.md section 5.
+
+# Names of environment variables that carry your own keys for external APIs used by
+# /search or eval. Leave empty when the project runs offline.
+external_secrets = []
+
+# Host names your running services call over HTTPS, for example a hosted embedding
+# API or the host you download a model from at run time. Leave empty when offline.
+egress_hosts = []
+
+# true when GET /search returns the same ranking for the same input and data.
+search_deterministic = true
+
+# true when eval writes the same rankings for the same input and data.
+eval_deterministic = true

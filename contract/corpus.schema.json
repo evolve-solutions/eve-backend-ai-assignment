@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:library-contract:corpus-record",
+  "title": "Corpus record",
+  "description": "One line of the corpus at LIBRARY_CORPUS_PATH (JSON Lines). Every check supplies a corpus in this format; work_key is unique within a corpus, content_hash follows the recipe in runtime.md section 3, and a record has no fields other than those listed here.",
+  "type": "object",
+  "required": [
+    "work_key", "title", "subtitle", "authors", "subjects", "description", "first_publish_year",
+    "languages", "edition_keys", "isbns", "content_hash", "edition_count", "description_chars",
+    "source", "source_record_id", "source_url", "licence_status", "licence_terms_url"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "work_key": {"type": "string", "pattern": "^/works/OL[0-9]+W$"},
+    "title": {"type": "string", "minLength": 1},
+    "subtitle": {"type": ["string", "null"]},
+    "authors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "name"],
+        "additionalProperties": false,
+        "properties": {"key": {"type": "string"}, "name": {"type": "string"}}
+      }
+    },
+    "subjects": {"type": "array", "items": {"type": "string"}},
+    "description": {"type": "string"},
+    "first_publish_year": {"type": ["integer", "null"]},
+    "languages": {"type": "array", "items": {"type": "string"}},
+    "edition_keys": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^OL[0-9]+M$"}},
+    "isbns": {"type": "array", "items": {"type": "string"}},
+    "content_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "edition_count": {"type": "integer", "minimum": 0},
+    "description_chars": {"type": "integer", "minimum": 0},
+    "source": {"type": "string"},
+    "source_record_id": {"type": "string"},
+    "source_url": {"type": "string"},
+    "licence_status": {"type": "string"},
+    "licence_terms_url": {"type": "string"}
+  }
+}

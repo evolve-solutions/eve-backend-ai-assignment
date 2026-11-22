@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:library-contract:grading",
+  "title": "grading.toml",
+  "description": "What the grading environment must provide to run the project. Parsed from TOML at the repository root.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["external_secrets", "egress_hosts", "search_deterministic", "eval_deterministic"],
+  "properties": {
+    "external_secrets": {
+      "description": "Names of environment variables that carry the candidate's own keys for external APIs. Empty when the project runs offline. Names reserved by the grading environment are rejected.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z_][A-Z0-9_]*$",
+        "not": {
+          "anyOf": [
+            {"pattern": "^(LIBRARY_|ANTHROPIC_|BUILDX_|DOCKER_|COMPOSE_)"},
+            {"pattern": "^(HTTPS?_PROXY|NO_PROXY|ALL_PROXY|PATH|HOME)$"}
+          ]
+        }
+      }
+    },
+    "egress_hosts": {
+      "description": "Lowercase DNS host names the running services call over HTTPS through the grading proxy. No scheme, port, path, wildcard or IP literal.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 253,
+        "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+      }
+    },
+    "search_deterministic": {
+      "description": "true when GET /search returns the same ranking for the same input and the same data.",
+      "type": "boolean"
+    },
+    "eval_deterministic": {
+      "description": "true when the eval service writes the same rankings for the same input and the same data.",
+      "type": "boolean"
+    }
+  }
+}

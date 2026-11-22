@@ -1,0 +1,308 @@
+openapi: 3.1.0
+info:
+  title: Library service
+  version: 1.0.0
+  summary: HTTP contract of the Library service assignment.
+  description: |
+    The grading environment talks to the service only through this API.
+    Runtime rules (startup, data files, network, limits) are in `runtime.md`.
+    Error responses carry no required body; clients rely on the status code.
+    Where a response lists both 400 and 422 for the same problem, either is accepted.
+    Every request and response body is JSON (`application/json`).
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Readiness
+      description: Returns 200 only after the inventory and the corpus are loaded and every search index is ready.
+      responses:
+        "200":
+          description: Ready.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+        "503":
+          description: Not ready yet.
+  /search:
+    get:
+      operationId: searchCatalog
+      summary: Search the catalog
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Free-text query, an exact title, or an ISBN.
+          schema: {type: string, minLength: 1}
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 100, default: 10}
+      responses:
+        "200":
+          description: Works ranked by descending score.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SearchResponse"}
+        "400":
+          description: Missing `q` or `limit` outside 1..100.
+        "422":
+          description: Missing `q` or `limit` outside 1..100.
+  /reservations:
+    post:
+      operationId: placeReservation
+      summary: Place a reservation for the calling user
+      description: |
+        At most one active reservation per user and Work. Repeating the request
+        returns the existing reservation with 200; a new reservation returns 201.
+        Under contention the service may answer 503 with `Retry-After`; it must
+        not answer any other error because of contention.
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReservationRequest"}
+      responses:
+        "200":
+          description: The caller already holds an active reservation for this Work.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Reservation"}
+        "201":
+          description: Reservation created.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Reservation"}
+        "400":
+          description: Malformed body.
+        "401":
+          description: Missing `X-User-Id`.
+        "404":
+          description: Unknown `work_key`.
+        "422":
+          description: Malformed body, or `edition_key` does not belong to the Work.
+        "503":
+          $ref: "#/components/responses/Contention"
+  /reservations/{reservation_id}:
+    get:
+      operationId: getReservation
+      summary: Read one reservation
+      parameters:
+        - name: reservation_id
+          in: path
+          required: true
+          schema: {type: string, minLength: 1}
+      responses:
+        "200":
+          description: The reservation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Reservation"}
+        "404":
+          description: Unknown reservation.
+  /works/{work_key}/reservations:
+    get:
+      operationId: listWorkReservations
+      summary: Every active reservation of one Work
+      parameters:
+        - name: work_key
+          in: path
+          required: true
+          description: |
+            The full Work key, percent-encoded as one path segment:
+            `/works/OL45883W` is sent as `%2Fworks%2FOL45883W`.
+          schema: {$ref: "#/components/schemas/WorkKey"}
+      responses:
+        "200":
+          description: Active reservations of the Work, in no particular order.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkReservations"}
+        "404":
+          description: Unknown Work.
+  /agent/turns:
+    post:
+      operationId: postAgentTurn
+      summary: One user turn of the library assistant
+      description: |
+        The assistant may search the catalog on its own. It never changes state
+        in this call: a reservation it proposes is returned in `pending_actions`
+        and runs only after `POST /agent/confirmations/{confirmation_id}` by the
+        same user.
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentTurnRequest"}
+      responses:
+        "200":
+          description: The assistant's reply and any actions waiting for confirmation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnResponse"}
+        "400":
+          description: Malformed body.
+        "401":
+          description: Missing `X-User-Id`.
+        "404":
+          description: Unknown `conversation_id` for this user.
+        "422":
+          description: Malformed body.
+  /agent/confirmations/{confirmation_id}:
+    post:
+      operationId: confirmAgentAction
+      summary: Run one pending action of the calling user, exactly once
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+        - name: confirmation_id
+          in: path
+          required: true
+          schema: {type: string, minLength: 1}
+      responses:
+        "200":
+          description: The action ran; the caller already held an active reservation for the Work.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Reservation"}
+        "201":
+          description: The action ran and created a reservation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Reservation"}
+        "401":
+          description: Missing `X-User-Id`.
+        "404":
+          description: Unknown confirmation, or it belongs to another user.
+        "409":
+          description: The confirmation was already used.
+        "503":
+          $ref: "#/components/responses/Contention"
+components:
+  parameters:
+    UserId:
+      name: X-User-Id
+      in: header
+      required: true
+      description: Opaque identifier of the signed-in user.
+      schema: {type: string, minLength: 1, maxLength: 200}
+  responses:
+    Contention:
+      description: Temporary contention; the client retries after `Retry-After` seconds.
+      headers:
+        Retry-After:
+          required: true
+          description: Whole seconds to wait before retrying.
+          schema: {type: integer, minimum: 0}
+  schemas:
+    WorkKey:
+      type: string
+      pattern: "^/works/OL[0-9]+W$"
+      examples: ["/works/OL45883W"]
+    EditionKey:
+      type: string
+      pattern: "^OL[0-9]+M$"
+      examples: ["OL7353617M"]
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: {const: ready}
+    SearchResult:
+      type: object
+      required: [work_key, title, score]
+      properties:
+        work_key: {$ref: "#/components/schemas/WorkKey"}
+        title: {type: string}
+        score: {type: number}
+    SearchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          maxItems: 100
+          items: {$ref: "#/components/schemas/SearchResult"}
+    ReservationRequest:
+      type: object
+      required: [work_key]
+      properties:
+        work_key: {$ref: "#/components/schemas/WorkKey"}
+        edition_key: {$ref: "#/components/schemas/EditionKey"}
+    Reservation:
+      type: object
+      required: [id, user_id, work_key, edition_key, status, assigned_copy_id, queue_position]
+      properties:
+        id: {type: string, minLength: 1}
+        user_id: {type: string, minLength: 1}
+        work_key: {$ref: "#/components/schemas/WorkKey"}
+        edition_key:
+          description: The requested edition, or null when any edition of the Work is acceptable.
+          oneOf:
+            - {$ref: "#/components/schemas/EditionKey"}
+            - {type: "null"}
+        status:
+          type: string
+          enum: [READY_FOR_PICKUP, QUEUED]
+        assigned_copy_id:
+          description: The copy held for the user; set only when status is READY_FOR_PICKUP.
+          type: [string, "null"]
+        queue_position:
+          description: 1-based position among QUEUED reservations of the Work; set only when status is QUEUED.
+          type: [integer, "null"]
+          minimum: 1
+      allOf:
+        - if:
+            properties: {status: {const: READY_FOR_PICKUP}}
+          then:
+            properties:
+              assigned_copy_id: {type: string, minLength: 1}
+              queue_position: {type: "null"}
+        - if:
+            properties: {status: {const: QUEUED}}
+          then:
+            properties:
+              assigned_copy_id: {type: "null"}
+              queue_position: {type: integer}
+    WorkReservations:
+      type: object
+      required: [reservations]
+      properties:
+        reservations:
+          type: array
+          items: {$ref: "#/components/schemas/Reservation"}
+    AgentTurnRequest:
+      type: object
+      required: [message]
+      properties:
+        conversation_id:
+          description: Omit to start a conversation; send the returned value to continue it.
+          type: string
+          minLength: 1
+        message: {type: string, minLength: 1}
+    PendingAction:
+      type: object
+      required: [confirmation_id, tool, input]
+      properties:
+        confirmation_id: {type: string, minLength: 1}
+        tool:
+          type: string
+          enum: [place_reservation]
+        input:
+          description: The arguments the action will run with.
+          type: object
+          required: [work_key]
+          properties:
+            work_key: {$ref: "#/components/schemas/WorkKey"}
+            edition_key: {$ref: "#/components/schemas/EditionKey"}
+    AgentTurnResponse:
+      type: object
+      required: [conversation_id, reply, pending_actions]
+      properties:
+        conversation_id: {type: string, minLength: 1}
+        reply: {type: string}
+        pending_actions:
+          type: array
+          items: {$ref: "#/components/schemas/PendingAction"}

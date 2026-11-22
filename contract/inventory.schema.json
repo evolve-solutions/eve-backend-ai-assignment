@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:library-contract:inventory",
+  "title": "Inventory",
+  "description": "Physical copies the library holds, read from LIBRARY_INVENTORY_PATH. Every copy_id is unique. Every work_key exists in the corpus of the same check (LIBRARY_CORPUS_PATH), which may differ from data/corpus/openlibrary-works.jsonl, and edition_key is one of that Work's edition_keys in that corpus.",
+  "type": "object",
+  "required": ["copies"],
+  "additionalProperties": false,
+  "properties": {
+    "copies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["copy_id", "work_key", "edition_key"],
+        "additionalProperties": false,
+        "properties": {
+          "copy_id": {"type": "string", "minLength": 1, "maxLength": 64},
+          "work_key": {"type": "string", "pattern": "^/works/OL[0-9]+W$"},
+          "edition_key": {"type": "string", "pattern": "^OL[0-9]+M$"}
+        }
+      }
+    }
+  }
+}
